@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("AutoResx")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyDescription("Auto run Tools-> Generate Local Resource command for each aspx and ascx file.")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("cuiliang.bj@gmail.com")]
 [assembly: AssemblyProduct("AutoResx")]

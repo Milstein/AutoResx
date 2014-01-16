@@ -112,7 +112,13 @@ namespace cuiliangbjgmailcom.AutoResx
 
 
         private IList<ProjectItem> _sourceFiles = new List<ProjectItem>();
+        private IList<ProjectItem> _resxFiles = new List<ProjectItem>();
         private IList<string>  _errors = new List<string>();
+        private bool _removeOldTagsAndFiles = true; //是否清楚原来的resource文件
+        int _waitForDesignViewSeconds = 10;
+        int _waitForCommandSeconds = 5;
+        int _waitForSaveSeconds = 2;
+        private int _maxFileCount = int.MaxValue;
 
         private void ProcessFiles()
         {
@@ -127,44 +133,58 @@ namespace cuiliangbjgmailcom.AutoResx
 
             //
             Projects ps = dte.Solution.Projects;
+            IList<string> projects= new List<string>();
             foreach (Project p in ps)
             {
-                if (p.FullName.ToLower().EndsWith(".csproj"))
+                projects.Add(p.Name);
+            }
+
+            if (projects.Count == 0)
+            {
+                MessageBox.Show("No project to process.");
+                return;
+            }
+
+            OptionForm optionForm = new OptionForm(projects);
+            if (optionForm.ShowDialog() != DialogResult.OK)
+            {
+                MessageBox.Show("Task canceled.");
+                return;
+            }
+
+            _waitForCommandSeconds = optionForm.WaitForCommandReadySeconds;
+            _waitForDesignViewSeconds = optionForm.WaitForDesignViewSeconds;
+            _waitForSaveSeconds = optionForm.WaitForSaveSeconds;
+            _maxFileCount = optionForm.MaxProcessFiles;
+            _removeOldTagsAndFiles = optionForm.RemoveOldTags;
+
+            foreach (Project p in ps)
+            {
+                if (p.Name.Equals(optionForm.SelectedProject, StringComparison.InvariantCultureIgnoreCase)) //do this only for cs project
                 {
                     Console.WriteLine("Processing project :" + p.Name);
 
                     foreach (ProjectItem pi in p.ProjectItems)
                     {
-                        GetFiles(pi);
+                        GetSourceFiles(pi);
                     }
                 }
             }
-            
 
-            //Array projects = dte.ActiveSolutionProjects as Array;
-
-
-            //if (projects.Length > 0)
-            //{
-            //    Project currentproject = projects.GetValue(0) as Project;
-
-            //    foreach (ProjectItem pi in currentproject.ProjectItems)
-            //    {
-            //        GetFiles(pi);
-            //    }
-            //}
-
-            
+            int count = 0; //how many files proccessed
             foreach (var file in _sourceFiles)
             {
-                
 
                 Console.WriteLine("Processing file :" + file.Name);
 
                 ProcessFile(dte, file);
 
-                
-                
+                count ++;
+
+                if (count >= _maxFileCount)
+                {
+                    break;
+                }
             }
 
             if (_errors.Count > 0)
@@ -172,7 +192,7 @@ namespace cuiliangbjgmailcom.AutoResx
                 File.WriteAllLines("D:\\AutoResxError.txt", _errors);
                 System.Diagnostics.Process.Start("NotePad.exe", "D:\\AutoResxError.txt");
             }
-            MessageBox.Show("共处理了" + _sourceFiles.Count + "个文件");
+            MessageBox.Show(String.Format("Total {0} files processed. {1} errors.", count, _errors.Count));
 
 
         }
@@ -181,26 +201,20 @@ namespace cuiliangbjgmailcom.AutoResx
         /// 将符合条件的文件加入队列
         /// </summary>
         /// <param name="pi"></param>
-        private void GetFiles(ProjectItem pi)
+        private void GetSourceFiles(ProjectItem pi)
         {
             string fileName = pi.Name.ToLower();
-            if (fileName.Contains("debug"))
-            {
-                return;
-            }
+            //if (fileName.Contains("debug"))
+            //{
+            //    return;
+            //}
 
             //删除原来的resx文件
-            if (fileName.EndsWith(".aspx.resx") || fileName.EndsWith(".ascx.resx"))
+            if (_removeOldTagsAndFiles &&
+                (fileName.EndsWith(".aspx.resx") || fileName.EndsWith(".ascx.resx")))
             {
-                try
-                {
-                    pi.Delete();
-                }
-                catch (Exception ex)
-                {
-                    //throw;
-                }
-                
+                _resxFiles.Add(pi);
+
                 return;
             }
 
@@ -210,86 +224,107 @@ namespace cuiliangbjgmailcom.AutoResx
                 _sourceFiles.Add(pi);
             }
 
-            //base case
+            //对子目录进行处理
             if (pi.ProjectItems == null)
                 return ;
 
             foreach (ProjectItem item in pi.ProjectItems)
             {
-                GetFiles(item);
+                GetSourceFiles(item);
             }
         }
 
 
         private void ProcessFile(DTE2 dte, ProjectItem pi)
         {
+            
+
             var window = pi.Open(EnvDTE.Constants.vsViewKindTextView);
             window.Activate();
-
-            //
-            // 清除Markup文件中的原来的resourcekey信息。
-            //
-
-            Find2 findWin = dte.Find as Find2;
-            findWin.WaitForFindToComplete = true;
-            findWin.FindReplace(vsFindAction.vsFindActionReplaceAll,
-                "meta:resourceKey=\"[a-zA-Z0-9]+\"",
-                (int) vsFindOptions.vsFindOptionsRegularExpression,
-                "",
-                vsFindTarget.vsFindTargetCurrentDocument, "", "", vsFindResultsLocation.vsFindResultsNone);
-
-            dte.ExecuteCommand("Edit.FormatDocument");
-            dte.ExecuteCommand("File.SaveAll");
-
-            dte.ExecuteCommand("View.ViewDesigner");
-            window.Activate();
-
+            
             //
             // delete old resx file
             //
-            string filePath = dte.ActiveDocument.FullName;
-
-            string resxFile = Path.Combine(Path.GetDirectoryName(filePath),
-                "App_LocalResources\\" + Path.GetFileName(filePath) + ".resx");
-
-            try
+            if (_removeOldTagsAndFiles)
             {
-                //MessageBox.Show(resxFile);
+                //
+                // 清除Markup文件中的原来的resourcekey信息。
+                //
+                Find2 findWin = dte.Find as Find2;
+                findWin.WaitForFindToComplete = true;
+                findWin.FindReplace(vsFindAction.vsFindActionReplaceAll,
+                    "meta:resourceKey=\"[a-zA-Z0-9]+\"",
+                    (int)vsFindOptions.vsFindOptionsRegularExpression,
+                    "",
+                    vsFindTarget.vsFindTargetCurrentDocument, "", "", vsFindResultsLocation.vsFindResultsNone);
 
-                if (File.Exists(resxFile))
+                dte.ExecuteCommand("Edit.FormatDocument");
+                dte.ExecuteCommand("File.SaveAll");
+
+                dte.ExecuteCommand("View.ViewDesigner");
+                window.Activate();
+
+
+                //
+                // delete resx file
+                //
+                foreach (ProjectItem resx in _resxFiles)
                 {
-                    File.Delete(resxFile);
+                    if (resx.Name.Equals(pi.Name + ".resx", StringComparison.InvariantCultureIgnoreCase))
+                    {
+                        try
+                        {
+                            resx.Delete();
+                        }
+                        catch (Exception)
+                        {
+                        }
+                        
+                        _resxFiles.Remove(resx);
+                        break;
+                    }
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine(" Delete resx file failed:" + resxFile + " EX:" + ex.Message);
-            }
+            
 
             dte.ExecuteCommand("View.ViewDesigner");
             
-            MessageBox.Show("Wait for view!"); //等待视图加载完成
+            //MessageBox.Show("Wait for view!"); //等待视图加载完成
+            WaitForm waitFrm = new WaitForm("Please wait Design View Ready...", _waitForDesignViewSeconds);
+            waitFrm.ShowDialog();
+
             dte.ExecuteCommand("File.SaveAll");
             window.Activate();
             
-
+            //IF still can not execute generateresouce command, do something and retray
+            //如果此时仍然不能执行命令，那么做点啥事过一会儿再试试。
             if (!dte.Commands.Item("Tools.GenerateLocalResource").IsAvailable)
             {
                 dte.ExecuteCommand("View.ViewMarkup");
                 dte.ExecuteCommand("View.ViewDesigner");
                 dte.ExecuteCommand("File.SaveAll");
-                MessageBox.Show("Wait for command again!");
+
+                if (_waitForCommandSeconds > 0)
+                {
+                    waitFrm = new WaitForm("Wait for Command ready...", _waitForCommandSeconds);
+                    waitFrm.ShowDialog();
+                }
             }
 
+            // generate resource and save
             if (dte.Commands.Item("Tools.GenerateLocalResource").IsAvailable)
             {
                 try
                 {
                     dte.ExecuteCommand("Tools.GenerateLocalResource");
-                    //System.Threading.Thread.Sleep(10000); //等待资源生成
-                    //MessageBox.Show("Wait resource generation.");
-
                     dte.ExecuteCommand("File.SaveAll");
+
+                    if (_waitForSaveSeconds > 0)
+                    {
+                        waitFrm = new WaitForm("Wait for save...", _waitForSaveSeconds);
+                        waitFrm.ShowDialog();
+                    }
+                    
                 }
                 catch (Exception ex)
                 {
@@ -302,22 +337,9 @@ namespace cuiliangbjgmailcom.AutoResx
             else
             {
                 _errors.Add("Process file " + pi.Name + " : NO COMMAND Available");
-                MessageBox.Show("can not execute generate resource command");
+                //MessageBox.Show("can not execute generate resource command");
+                dte.ActiveWindow.Close(vsSaveChanges.vsSaveChangesNo);
             }
-
-
-            
-            //try
-            //{
-            //    dte.ExecuteCommand("Tools.GenerateLocalResource");
-            //}
-            //catch (Exception ex)
-            //{
-            //    _errors.Add("Process file " + pi.Name + " EX:" + ex.Message);
-            //}
-
-
-            //dte.ActiveWindow.Close(vsSaveChanges.vsSaveChangesYes);
         }
     }
 }
